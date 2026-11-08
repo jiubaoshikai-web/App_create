@@ -55,11 +55,25 @@ textarea{min-height:180px;resize:vertical;display:block}
 #viewer{position:fixed;inset:0;background:#000e;display:none;align-items:center;justify-content:center;z-index:9}
 #viewer img{max-width:100%;max-height:100%}
 .hidden{display:none!important}
+#sum{display:flex;gap:10px;padding:0 16px 10px}
+#sum div{flex:1;background:var(--card);border-radius:12px;padding:8px 12px}
+#sum b{font-size:24px;display:block;line-height:1.2}
+#sum span{font-size:12px;color:var(--sub)}
+#sum .warn b{color:var(--red)}
+#modal{position:fixed;inset:0;background:#0008;display:none;align-items:flex-end;justify-content:center;z-index:8}
+#modal .box{background:var(--bg);width:100%;max-width:560px;border-radius:16px 16px 0 0;padding:16px 16px calc(env(safe-area-inset-bottom) + 16px);max-height:90dvh;overflow-y:auto}
+#modal label{display:block;font-size:13px;color:var(--sub);margin:10px 0 4px}
+.thumbs img.sel{outline:3px solid var(--green);outline-offset:-3px}
+.thumbs img.off{opacity:.35}
+.tphotos{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.tphotos img{width:64px;height:64px;border-radius:8px;object-fit:cover}
+.badge{font-size:12px;color:var(--green)}
 </style>
 </head>
 <body>
 <div id="app">
   <header><h1 id="title">メモ</h1><div id="hbtn"></div></header>
+  <div id="sum"></div>
   <main id="main"></main>
   <nav>
     <button data-tab="memos"><span class="i">📝</span>メモ</button>
@@ -67,6 +81,7 @@ textarea{min-height:180px;resize:vertical;display:block}
     <button data-tab="more"><span class="i">⚙️</span>その他</button>
   </nav>
 </div>
+<div id="modal"><div class="box" id="mbox"></div></div>
 <div id="viewer"><img alt=""></div>
 <input type="file" id="fcam" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="flib" accept="image/*" multiple class="hidden">
@@ -118,7 +133,18 @@ function viewImg(src) { const v = $('viewer'); v.firstElementChild.src = src; v.
 $('viewer').onclick = () => $('viewer').style.display = 'none';
 
 // ---------- render ----------
+function summary() {
+  const open = tasks.filter(t => !t.done);
+  const due = open.filter(t => t.due && t.due <= today()).length;
+  const el = $('sum');
+  el.classList.toggle('hidden', !!editing);
+  el.innerHTML = `<div class="${due ? 'warn' : ''}"><b>${due}</b><span>今日までの未完了</span></div>
+    <div><b>${open.length}</b><span>未完了</span></div>
+    <div><b>${tasks.length}</b><span>タスク総数</span></div>`;
+}
+
 function render() {
+  summary();
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   if (editing) return renderEditor();
   if (tab === 'memos') renderMemos();
@@ -137,7 +163,7 @@ function renderMemos() {
     const q = $('q').value.toLowerCase();
     const l = memos.filter(m => (m.title + m.body).toLowerCase().includes(q));
     $('list').innerHTML = l.length ? l.map(m => `<div class="item" data-id="${m.id}"><div class="grow">
-      <div class="t">${esc(m.title) || '(無題)'}</div>
+      <div class="t">${esc(m.title) || '(無題)'} ${tasks.some(t => t.memoId === m.id) ? '<span class="badge">✅ タスクあり</span>' : ''}</div>
       <div class="s">${fmt(m.updated)}　${esc(m.body.split('\n')[0])}</div>
       ${m.photos.length ? '<div class="mini">' + m.photos.slice(0,4).map(p => `<img src="${p}">`).join('') + '</div>' : ''}
     </div></div>`).join('') : '<div class="empty">メモがありません</div>';
@@ -170,7 +196,7 @@ function renderEditor() {
   const linked = () => {
     const l = tasks.filter(t => t.memoId === m.id);
     $('linked').innerHTML = l.length ? '<div class="tag">このメモから作成したタスク</div><div class="card">' +
-      l.map(t => `<div class="item ${t.done?'done':''}"><div class="grow t">${esc(t.title)}</div></div>`).join('') + '</div>' : '';
+      l.map(t => `<div class="item ${t.done?'done':''}"><div class="grow t">${esc(t.title)}${t.due ? ` <span class="s">（期日 ${t.due}）</span>` : ''}</div></div>`).join('') + '</div>' : '';
   };
   thumbs(); linked();
   $('cam').onclick = () => { sync(); $('fcam').click(); };
@@ -181,18 +207,32 @@ function renderEditor() {
   };
   $('fcam').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
   $('flib').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
-  $('addtask').onclick = async () => {
+  $('addtask').onclick = () => {
     sync();
     const ta = $('mb');
     let text = ta.value.slice(ta.selectionStart, ta.selectionEnd).trim();
     if (!text) text = m.title.trim() || m.body.split('\n').find(l => l.trim())?.trim() || '';
     if (!text) return alert('タスクにする文字を入力するか、選択してください');
-    const t = prompt('タスク名', text.slice(0, 100));
-    if (t === null || !t.trim()) return;
-    await put('tasks', {id: uid(), title: t.trim(), done:false, due:'', memoId: m.id, created: Date.now()});
-    tasks = await all('tasks'); linked();
-    $('addtask').textContent = '✅ 追加しました';
-    setTimeout(() => { const b = $('addtask'); if (b) b.textContent = '✅ タスクに追加'; }, 1500);
+    const sel = new Set(m.photos.map((_, i) => i));
+    const box = $('mbox');
+    box.innerHTML = `<h3 style="margin:0 0 4px">タスクに追加</h3>
+      <label>タスク名</label><input type="text" id="tn" value="${esc(text.slice(0, 100))}">
+      <label>期日</label><input type="date" id="td" value="">
+      ${m.photos.length ? '<label>添付する写真（タップで選択/解除）</label><div class="thumbs" id="tp"></div>' : ''}
+      <div class="row" style="margin-top:14px"><button class="btn fill" id="tok" style="flex:1;background:var(--green)">追加</button><button class="btn" id="tcancel">キャンセル</button></div>`;
+    const drawP = () => { const tp = $('tp'); if (!tp) return;
+      tp.innerHTML = m.photos.map((p, i) => `<div><img src="${p}" data-i="${i}" class="${sel.has(i) ? 'sel' : 'off'}"></div>`).join('');
+      tp.querySelectorAll('img').forEach(e => e.onclick = () => { const i = +e.dataset.i; sel.has(i) ? sel.delete(i) : sel.add(i); drawP(); }); };
+    drawP();
+    $('modal').style.display = 'flex';
+    const close = () => $('modal').style.display = 'none';
+    $('tcancel').onclick = close;
+    $('tok').onclick = async () => {
+      const name = $('tn').value.trim(); if (!name) return;
+      await put('tasks', {id: uid(), title: name, done:false, due: $('td').value, memoId: m.id,
+        photos: m.photos.filter((_, i) => sel.has(i)), created: Date.now()});
+      tasks = await all('tasks'); close(); linked(); summary();
+    };
   };
   $('done').onclick = async () => {
     sync();
@@ -211,14 +251,14 @@ function renderTasks() {
   title.textContent = 'タスク';
   hbtn.innerHTML = '';
   const memoOf = id => memos.find(m => m.id === id);
-  let h = `<div class="row"><input type="text" id="nt" placeholder="新しいタスクを追加…"><button class="btn fill" id="add">追加</button></div>
+  let h = `<div class="row"><input type="text" id="nt" placeholder="新しいタスクを追加…"><input type="date" id="nd" style="width:auto;flex:none"><button class="btn fill" id="add">追加</button></div>
     <div class="bar">${[['open','未完了'],['today','今日まで'],['done','完了'],['all','すべて']].map(([k,l]) => `<button class="seg ${filter===k?'on':''}" data-f="${k}">${l}</button>`).join('')}</div>
     <div class="card" id="tl"></div>`;
   main.innerHTML = h;
   const add = async () => {
     const v = $('nt').value.trim(); if (!v) return;
-    await put('tasks', {id: uid(), title: v, done:false, due:'', memoId:null, created: Date.now()});
-    tasks = await all('tasks'); renderTasks();
+    await put('tasks', {id: uid(), title: v, done:false, due: $('nd').value, memoId:null, photos:[], created: Date.now()});
+    tasks = await all('tasks'); renderTasks(); summary();
   };
   $('add').onclick = add; $('nt').onkeydown = e => { if (e.key === 'Enter') add(); };
   main.querySelectorAll('.seg').forEach(b => b.onclick = () => { filter = b.dataset.f; renderTasks(); });
@@ -229,14 +269,15 @@ function renderTasks() {
     return `<div class="item ${t.done?'done':''}" data-id="${t.id}">
       <button class="chk ${t.done?'on':''}" data-c="${t.id}">${t.done?'✓':''}</button>
       <div class="grow"><div class="t">${esc(t.title)}</div>
-      <div class="s">${t.due ? `<span class="${!t.done && t.due < today() ? 'late' : ''}">期限 ${t.due}</span>　` : ''}${m ? `<span class="tag" data-m="${m.id}">📝 ${esc(m.title) || '(無題)'}</span>` : ''}</div></div>
+      <div class="s">${t.due ? `<span class="${!t.done && t.due < today() ? 'late' : ''}">期限 ${t.due}</span>　` : ''}${m ? `<span class="tag" data-m="${m.id}">📝 ${esc(m.title) || '(無題)'}</span>` : ''}</div>${(t.photos||[]).length ? '<div class="tphotos">' + t.photos.map((p,i) => `<img src="${p}" data-ti="${t.id}:${i}">`).join('') + '</div>' : ''}</div>
       <input type="date" value="${t.due}" data-d="${t.id}" style="width:auto;padding:4px;font-size:13px">
       <button class="btn red" data-r="${t.id}">🗑</button></div>`;
   }).join('') : '<div class="empty">タスクがありません</div>';
-  const upd = async (id, f) => { const t = tasks.find(x => x.id === id); f(t); await put('tasks', t); tasks = await all('tasks'); renderTasks(); };
+  const upd = async (id, f) => { const t = tasks.find(x => x.id === id); f(t); await put('tasks', t); tasks = await all('tasks'); renderTasks(); summary(); };
   main.querySelectorAll('[data-c]').forEach(e => e.onclick = () => upd(e.dataset.c, t => t.done = !t.done));
-  main.querySelectorAll('[data-r]').forEach(e => e.onclick = async () => { if (confirm('削除しますか？')) { await del('tasks', e.dataset.r); tasks = await all('tasks'); renderTasks(); } });
+  main.querySelectorAll('[data-r]').forEach(e => e.onclick = async () => { if (confirm('削除しますか？')) { await del('tasks', e.dataset.r); tasks = await all('tasks'); renderTasks(); summary(); } });
   main.querySelectorAll('[data-d]').forEach(e => e.onchange = () => upd(e.dataset.d, t => t.due = e.value));
+  main.querySelectorAll('[data-ti]').forEach(e => e.onclick = ev => { ev.stopPropagation(); const [id,i] = e.dataset.ti.split(':'); viewImg(tasks.find(x => x.id === id).photos[+i]); });
   main.querySelectorAll('[data-m]').forEach(e => e.onclick = () => { editing = structuredClone(memoOf(e.dataset.m)); tab = 'memos'; render(); });
 }
 
