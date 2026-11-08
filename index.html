@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="メモタスク">
+<meta name="theme-color" content="#f2f2f7">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg">
+<title>メモ＆タスク</title>
+<style>
+:root{--bg:#f2f2f7;--card:#fff;--text:#1c1c1e;--sub:#8e8e93;--line:#e5e5ea;--accent:#ff9f0a;--blue:#0a84ff;--red:#ff3b30;--green:#34c759}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--text:#f2f2f7;--sub:#8e8e93;--line:#38383a}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif}
+#app{display:flex;flex-direction:column;height:100%;height:100dvh}
+header{padding:calc(env(safe-area-inset-top) + 10px) 16px 8px;display:flex;align-items:center;justify-content:space-between}
+header h1{margin:0;font-size:28px}
+main{flex:1;overflow-y:auto;padding:0 16px 24px;-webkit-overflow-scrolling:touch}
+nav{display:flex;border-top:1px solid var(--line);background:var(--card);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;background:none;padding:10px 0 8px;font-size:12px;color:var(--sub)}
+nav button .i{display:block;font-size:22px}
+nav button.on{color:var(--accent)}
+.btn{border:0;background:none;color:var(--accent);font-size:16px;padding:8px 4px}
+.btn.fill{background:var(--accent);color:#fff;border-radius:10px;padding:10px 14px}
+.btn.red{color:var(--red)}
+.card{background:var(--card);border-radius:12px;margin-bottom:10px;overflow:hidden}
+.item{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.item:last-child{border-bottom:0}
+.item .t{font-weight:600}
+.item .s{color:var(--sub);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grow{flex:1;min-width:0}
+input[type=text],input[type=date],textarea{width:100%;border:0;background:var(--card);color:var(--text);font:inherit;padding:12px 14px;border-radius:12px;outline:none}
+textarea{min-height:180px;resize:vertical;display:block}
+.row{display:flex;gap:8px;margin-bottom:10px}
+.chk{width:26px;height:26px;border-radius:50%;border:2px solid var(--sub);flex:none;margin-top:1px;background:none;padding:0;color:#fff;font-size:15px;line-height:1}
+.chk.on{background:var(--green);border-color:var(--green)}
+.done .t{text-decoration:line-through;color:var(--sub)}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.thumbs div{position:relative}
+.thumbs img{width:96px;height:96px;object-fit:cover;border-radius:10px;display:block}
+.thumbs .x{position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:50%;background:var(--red);color:#fff;border:0;font-size:14px;line-height:1;padding:0}
+.mini{display:inline-flex;gap:3px;margin-top:4px}
+.mini img{width:32px;height:32px;border-radius:6px;object-fit:cover}
+.empty{text-align:center;color:var(--sub);padding:40px 0}
+.tag{font-size:12px;color:var(--blue)}
+.late{color:var(--red)}
+.bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.seg{border:0;background:var(--card);color:var(--text);padding:6px 12px;border-radius:16px;font-size:14px}
+.seg.on{background:var(--accent);color:#fff}
+#viewer{position:fixed;inset:0;background:#000e;display:none;align-items:center;justify-content:center;z-index:9}
+#viewer img{max-width:100%;max-height:100%}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <header><h1 id="title">メモ</h1><div id="hbtn"></div></header>
+  <main id="main"></main>
+  <nav>
+    <button data-tab="memos"><span class="i">📝</span>メモ</button>
+    <button data-tab="tasks"><span class="i">✅</span>タスク</button>
+    <button data-tab="more"><span class="i">⚙️</span>その他</button>
+  </nav>
+</div>
+<div id="viewer"><img alt=""></div>
+<input type="file" id="fcam" accept="image/*" capture="environment" class="hidden">
+<input type="file" id="flib" accept="image/*" multiple class="hidden">
+<input type="file" id="fimp" accept="application/json" class="hidden">
+<script>
+// ---------- IndexedDB ----------
+let db;
+const open = () => new Promise((res, rej) => {
+  const r = indexedDB.open('memo-task', 1);
+  r.onupgradeneeded = () => { r.result.createObjectStore('memos', {keyPath:'id'}); r.result.createObjectStore('tasks', {keyPath:'id'}); };
+  r.onsuccess = () => { db = r.result; res(); };
+  r.onerror = () => rej(r.error);
+});
+const tx = (s, m, f) => new Promise((res, rej) => {
+  const t = db.transaction(s, m), o = t.objectStore(s), q = f(o);
+  t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error);
+});
+const all = s => tx(s, 'readonly', o => o.getAll());
+const put = (s, v) => tx(s, 'readwrite', o => o.put(v));
+const del = (s, id) => tx(s, 'readwrite', o => o.delete(id));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- state ----------
+let tab = 'memos', memos = [], tasks = [], editing = null, filter = 'open';
+const $ = id => document.getElementById(id);
+const main = $('main'), hbtn = $('hbtn'), title = $('title');
+const today = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
+const fmt = t => new Date(t).toLocaleString('ja-JP', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
+
+async function load() { memos = (await all('memos')).sort((a,b) => b.updated - a.updated); tasks = await all('tasks'); }
+
+// ---------- image ----------
+function resize(file, max = 1280) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', .8));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(); };
+    img.src = url;
+  });
+}
+function viewImg(src) { const v = $('viewer'); v.firstElementChild.src = src; v.style.display = 'flex'; }
+$('viewer').onclick = () => $('viewer').style.display = 'none';
+
+// ---------- render ----------
+function render() {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  if (editing) return renderEditor();
+  if (tab === 'memos') renderMemos();
+  else if (tab === 'tasks') renderTasks();
+  else renderMore();
+}
+
+function renderMemos() {
+  title.textContent = 'メモ';
+  hbtn.innerHTML = '<button class="btn" id="new">＋ 新規</button>';
+  $('new').onclick = () => { editing = {id: uid(), title:'', body:'', photos:[], created: Date.now(), updated: Date.now(), isNew:true}; render(); };
+  let h = '<div class="row"><input type="text" id="q" placeholder="検索"></div>';
+  h += '<div class="card" id="list"></div>';
+  main.innerHTML = h;
+  const draw = () => {
+    const q = $('q').value.toLowerCase();
+    const l = memos.filter(m => (m.title + m.body).toLowerCase().includes(q));
+    $('list').innerHTML = l.length ? l.map(m => `<div class="item" data-id="${m.id}"><div class="grow">
+      <div class="t">${esc(m.title) || '(無題)'}</div>
+      <div class="s">${fmt(m.updated)}　${esc(m.body.split('\n')[0])}</div>
+      ${m.photos.length ? '<div class="mini">' + m.photos.slice(0,4).map(p => `<img src="${p}">`).join('') + '</div>' : ''}
+    </div></div>`).join('') : '<div class="empty">メモがありません</div>';
+    $('list').querySelectorAll('.item').forEach(e => e.onclick = () => { editing = structuredClone(memos.find(m => m.id === e.dataset.id)); render(); });
+  };
+  $('q').oninput = draw; draw();
+}
+
+function renderEditor() {
+  const m = editing;
+  title.textContent = 'メモ';
+  hbtn.innerHTML = '<button class="btn" id="done">完了</button>';
+  main.innerHTML = `
+    <div class="row"><input type="text" id="mt" placeholder="タイトル" value="${esc(m.title)}"></div>
+    <div class="row"><textarea id="mb" placeholder="本文（文字を選択して「タスクに追加」で選択部分だけ追加できます）">${esc(m.body)}</textarea></div>
+    <div class="thumbs" id="th"></div>
+    <div class="bar">
+      <button class="btn fill" id="cam">📷 撮影</button>
+      <button class="btn fill" id="lib" style="background:var(--blue)">🖼 写真を選ぶ</button>
+      <button class="btn fill" id="addtask" style="background:var(--green)">✅ タスクに追加</button>
+    </div>
+    <div id="linked"></div>
+    ${m.isNew ? '' : '<button class="btn red" id="rm">このメモを削除</button>'}`;
+  const sync = () => { m.title = $('mt').value; m.body = $('mb').value; };
+  const thumbs = () => {
+    $('th').innerHTML = m.photos.map((p,i) => `<div><img src="${p}" data-i="${i}"><button class="x" data-x="${i}">×</button></div>`).join('');
+    $('th').querySelectorAll('img').forEach(e => e.onclick = () => viewImg(m.photos[e.dataset.i]));
+    $('th').querySelectorAll('.x').forEach(e => e.onclick = () => { sync(); m.photos.splice(+e.dataset.x, 1); thumbs(); });
+  };
+  const linked = () => {
+    const l = tasks.filter(t => t.memoId === m.id);
+    $('linked').innerHTML = l.length ? '<div class="tag">このメモから作成したタスク</div><div class="card">' +
+      l.map(t => `<div class="item ${t.done?'done':''}"><div class="grow t">${esc(t.title)}</div></div>`).join('') + '</div>' : '';
+  };
+  thumbs(); linked();
+  $('cam').onclick = () => { sync(); $('fcam').click(); };
+  $('lib').onclick = () => { sync(); $('flib').click(); };
+  const addFiles = async files => {
+    for (const f of files) { try { m.photos.push(await resize(f)); } catch { alert('画像を読み込めませんでした'); } }
+    thumbs();
+  };
+  $('fcam').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
+  $('flib').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
+  $('addtask').onclick = async () => {
+    sync();
+    const ta = $('mb');
+    let text = ta.value.slice(ta.selectionStart, ta.selectionEnd).trim();
+    if (!text) text = m.title.trim() || m.body.split('\n').find(l => l.trim())?.trim() || '';
+    if (!text) return alert('タスクにする文字を入力するか、選択してください');
+    const t = prompt('タスク名', text.slice(0, 100));
+    if (t === null || !t.trim()) return;
+    await put('tasks', {id: uid(), title: t.trim(), done:false, due:'', memoId: m.id, created: Date.now()});
+    tasks = await all('tasks'); linked();
+    $('addtask').textContent = '✅ 追加しました';
+    setTimeout(() => { const b = $('addtask'); if (b) b.textContent = '✅ タスクに追加'; }, 1500);
+  };
+  $('done').onclick = async () => {
+    sync();
+    if (m.isNew && !m.title.trim() && !m.body.trim() && !m.photos.length) { editing = null; return render(); }
+    delete m.isNew; m.updated = Date.now();
+    await put('memos', m); await load(); editing = null; render();
+  };
+  const rm = $('rm');
+  if (rm) rm.onclick = async () => {
+    if (!confirm('このメモを削除しますか？')) return;
+    await del('memos', m.id); await load(); editing = null; render();
+  };
+}
+
+function renderTasks() {
+  title.textContent = 'タスク';
+  hbtn.innerHTML = '';
+  const memoOf = id => memos.find(m => m.id === id);
+  let h = `<div class="row"><input type="text" id="nt" placeholder="新しいタスクを追加…"><button class="btn fill" id="add">追加</button></div>
+    <div class="bar">${[['open','未完了'],['today','今日まで'],['done','完了'],['all','すべて']].map(([k,l]) => `<button class="seg ${filter===k?'on':''}" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="card" id="tl"></div>`;
+  main.innerHTML = h;
+  const add = async () => {
+    const v = $('nt').value.trim(); if (!v) return;
+    await put('tasks', {id: uid(), title: v, done:false, due:'', memoId:null, created: Date.now()});
+    tasks = await all('tasks'); renderTasks();
+  };
+  $('add').onclick = add; $('nt').onkeydown = e => { if (e.key === 'Enter') add(); };
+  main.querySelectorAll('.seg').forEach(b => b.onclick = () => { filter = b.dataset.f; renderTasks(); });
+  let l = tasks.filter(t => filter === 'all' || (filter === 'done' ? t.done : !t.done && (filter === 'open' || (t.due && t.due <= today()))));
+  l.sort((a,b) => (a.due || '9') .localeCompare(b.due || '9') || a.created - b.created);
+  $('tl').innerHTML = l.length ? l.map(t => {
+    const m = t.memoId && memoOf(t.memoId);
+    return `<div class="item ${t.done?'done':''}" data-id="${t.id}">
+      <button class="chk ${t.done?'on':''}" data-c="${t.id}">${t.done?'✓':''}</button>
+      <div class="grow"><div class="t">${esc(t.title)}</div>
+      <div class="s">${t.due ? `<span class="${!t.done && t.due < today() ? 'late' : ''}">期限 ${t.due}</span>　` : ''}${m ? `<span class="tag" data-m="${m.id}">📝 ${esc(m.title) || '(無題)'}</span>` : ''}</div></div>
+      <input type="date" value="${t.due}" data-d="${t.id}" style="width:auto;padding:4px;font-size:13px">
+      <button class="btn red" data-r="${t.id}">🗑</button></div>`;
+  }).join('') : '<div class="empty">タスクがありません</div>';
+  const upd = async (id, f) => { const t = tasks.find(x => x.id === id); f(t); await put('tasks', t); tasks = await all('tasks'); renderTasks(); };
+  main.querySelectorAll('[data-c]').forEach(e => e.onclick = () => upd(e.dataset.c, t => t.done = !t.done));
+  main.querySelectorAll('[data-r]').forEach(e => e.onclick = async () => { if (confirm('削除しますか？')) { await del('tasks', e.dataset.r); tasks = await all('tasks'); renderTasks(); } });
+  main.querySelectorAll('[data-d]').forEach(e => e.onchange = () => upd(e.dataset.d, t => t.due = e.value));
+  main.querySelectorAll('[data-m]').forEach(e => e.onclick = () => { editing = structuredClone(memoOf(e.dataset.m)); tab = 'memos'; render(); });
+}
+
+function renderMore() {
+  title.textContent = 'その他';
+  hbtn.innerHTML = '';
+  main.innerHTML = `<div class="card">
+    <div class="item"><div class="grow"><div class="t">バックアップを書き出す</div><div class="s">メモ・写真・タスクをファイルに保存</div></div><button class="btn" id="exp">書き出し</button></div>
+    <div class="item"><div class="grow"><div class="t">バックアップを読み込む</div><div class="s">現在のデータに追加されます</div></div><button class="btn" id="imp">読み込み</button></div></div>
+    <p class="s" style="color:var(--sub);font-size:13px">データはこの端末のSafari内に保存されます。ホーム画面に追加するとアプリのように使えます（共有ボタン →「ホーム画面に追加」）。</p>`;
+  $('exp').onclick = async () => {
+    const data = JSON.stringify({memos: await all('memos'), tasks: await all('tasks')});
+    const f = new File([data], 'memo-task-backup-' + today() + '.json', {type:'application/json'});
+    if (navigator.canShare && navigator.canShare({files:[f]})) { try { await navigator.share({files:[f]}); } catch {} return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click();
+  };
+  $('imp').onclick = () => $('fimp').click();
+  $('fimp').onchange = async e => {
+    try {
+      const d = JSON.parse(await e.target.files[0].text());
+      for (const m of d.memos || []) await put('memos', m);
+      for (const t of d.tasks || []) await put('tasks', t);
+      await load(); alert('読み込みました');
+    } catch { alert('読み込めませんでした'); }
+    e.target.value = '';
+  };
+}
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => { tab = b.dataset.tab; editing = null; render(); });
+open().then(load).then(render);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
