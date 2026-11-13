@@ -55,10 +55,10 @@ textarea{min-height:180px;resize:vertical;display:block}
 #viewer{position:fixed;inset:0;background:#000e;display:none;align-items:center;justify-content:center;z-index:9}
 #viewer img{max-width:100%;max-height:100%}
 .hidden{display:none!important}
-#sum{display:flex;gap:10px;padding:0 16px 10px}
-#sum div{flex:1;background:var(--card);border-radius:12px;padding:8px 12px}
+#sum{display:flex;gap:8px;padding:0 16px 10px}
+#sum div{flex:1;background:var(--card);border-radius:12px;padding:8px 10px}
 #sum b{font-size:24px;display:block;line-height:1.2}
-#sum span{font-size:12px;color:var(--sub)}
+#sum span{font-size:11px;color:var(--sub)}
 #sum .warn b{color:var(--red)}
 #modal{position:fixed;inset:0;background:#0008;display:none;align-items:flex-end;justify-content:center;z-index:8}
 #modal .box{background:var(--bg);width:100%;max-width:560px;border-radius:16px 16px 0 0;padding:16px 16px calc(env(safe-area-inset-bottom) + 16px);max-height:90dvh;overflow-y:auto}
@@ -67,6 +67,7 @@ textarea{min-height:180px;resize:vertical;display:block}
 .thumbs img.off{opacity:.35}
 .tphotos{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .tphotos img{width:64px;height:64px;border-radius:8px;object-fit:cover}
+.cnt{font-size:13px;color:var(--sub);margin:-4px 0 8px}
 .badge{font-size:12px;color:var(--green)}
 </style>
 </head>
@@ -102,6 +103,8 @@ const tx = (s, m, f) => new Promise((res, rej) => {
 const all = s => tx(s, 'readonly', o => o.getAll());
 const put = (s, v) => tx(s, 'readwrite', o => o.put(v));
 const del = (s, id) => tx(s, 'readwrite', o => o.delete(id));
+const shots = () => { try { return +localStorage.getItem('shots') || 0; } catch { return 0; } };
+const addShots = n => { try { localStorage.setItem('shots', shots() + n); } catch {} };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -140,7 +143,8 @@ function summary() {
   el.classList.toggle('hidden', !!editing);
   el.innerHTML = `<div class="${due ? 'warn' : ''}"><b>${due}</b><span>今日までの未完了</span></div>
     <div><b>${open.length}</b><span>未完了</span></div>
-    <div><b>${tasks.length}</b><span>タスク総数</span></div>`;
+    <div><b>${tasks.length}</b><span>タスク総数</span></div>
+    <div><b>${shots()}</b><span>📷 撮影数</span></div>`;
 }
 
 function render() {
@@ -165,7 +169,7 @@ function renderMemos() {
     $('list').innerHTML = l.length ? l.map(m => `<div class="item" data-id="${m.id}"><div class="grow">
       <div class="t">${esc(m.title) || '(無題)'} ${tasks.some(t => t.memoId === m.id) ? '<span class="badge">✅ タスクあり</span>' : ''}</div>
       <div class="s">${fmt(m.updated)}　${esc(m.body.split('\n')[0])}</div>
-      ${m.photos.length ? '<div class="mini">' + m.photos.slice(0,4).map(p => `<img src="${p}">`).join('') + '</div>' : ''}
+      ${m.photos.length ? '<div class="s">📷 ' + m.photos.length + '枚</div><div class="mini">' + m.photos.slice(0,4).map(p => `<img src="${p}">`).join('') + '</div>' : ''}
     </div></div>`).join('') : '<div class="empty">メモがありません</div>';
     $('list').querySelectorAll('.item').forEach(e => e.onclick = () => { editing = structuredClone(memos.find(m => m.id === e.dataset.id)); render(); });
   };
@@ -179,6 +183,7 @@ function renderEditor() {
   main.innerHTML = `
     <div class="row"><input type="text" id="mt" placeholder="タイトル" value="${esc(m.title)}"></div>
     <div class="row"><textarea id="mb" placeholder="本文（文字を選択して「タスクに追加」で選択部分だけ追加できます）">${esc(m.body)}</textarea></div>
+    <div class="cnt" id="cnt"></div>
     <div class="thumbs" id="th"></div>
     <div class="bar">
       <button class="btn fill" id="cam">📷 撮影</button>
@@ -189,6 +194,7 @@ function renderEditor() {
     ${m.isNew ? '' : '<button class="btn red" id="rm">このメモを削除</button>'}`;
   const sync = () => { m.title = $('mt').value; m.body = $('mb').value; };
   const thumbs = () => {
+    $('cnt').textContent = `📷 このメモの写真 ${m.photos.length}枚　／　累計撮影 ${shots()}枚`;
     $('th').innerHTML = m.photos.map((p,i) => `<div><img src="${p}" data-i="${i}"><button class="x" data-x="${i}">×</button></div>`).join('');
     $('th').querySelectorAll('img').forEach(e => e.onclick = () => viewImg(m.photos[e.dataset.i]));
     $('th').querySelectorAll('.x').forEach(e => e.onclick = () => { sync(); m.photos.splice(+e.dataset.x, 1); thumbs(); });
@@ -205,7 +211,7 @@ function renderEditor() {
     for (const f of files) { try { m.photos.push(await resize(f)); } catch { alert('画像を読み込めませんでした'); } }
     thumbs();
   };
-  $('fcam').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
+  $('fcam').onchange = async e => { const n = e.target.files.length; await addFiles(e.target.files); addShots(n); summary(); thumbs(); e.target.value = ''; };
   $('flib').onchange = async e => { await addFiles(e.target.files); e.target.value = ''; };
   $('addtask').onclick = () => {
     sync();
@@ -269,7 +275,7 @@ function renderTasks() {
     return `<div class="item ${t.done?'done':''}" data-id="${t.id}">
       <button class="chk ${t.done?'on':''}" data-c="${t.id}">${t.done?'✓':''}</button>
       <div class="grow"><div class="t">${esc(t.title)}</div>
-      <div class="s">${t.due ? `<span class="${!t.done && t.due < today() ? 'late' : ''}">期限 ${t.due}</span>　` : ''}${m ? `<span class="tag" data-m="${m.id}">📝 ${esc(m.title) || '(無題)'}</span>` : ''}</div>${(t.photos||[]).length ? '<div class="tphotos">' + t.photos.map((p,i) => `<img src="${p}" data-ti="${t.id}:${i}">`).join('') + '</div>' : ''}</div>
+      <div class="s">${t.due ? `<span class="${!t.done && t.due < today() ? 'late' : ''}">期限 ${t.due}</span>　` : ''}${(t.photos||[]).length ? `📷${t.photos.length}枚　` : ''}${m ? `<span class="tag" data-m="${m.id}">📝 ${esc(m.title) || '(無題)'}</span>` : ''}</div>${(t.photos||[]).length ? '<div class="tphotos">' + t.photos.map((p,i) => `<img src="${p}" data-ti="${t.id}:${i}">`).join('') + '</div>' : ''}</div>
       <input type="date" value="${t.due}" data-d="${t.id}" style="width:auto;padding:4px;font-size:13px">
       <button class="btn red" data-r="${t.id}">🗑</button></div>`;
   }).join('') : '<div class="empty">タスクがありません</div>';
