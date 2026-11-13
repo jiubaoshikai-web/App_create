@@ -68,6 +68,14 @@ textarea{min-height:180px;resize:vertical;display:block}
 .tphotos{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .tphotos img{width:64px;height:64px;border-radius:8px;object-fit:cover}
 .cnt{font-size:13px;color:var(--sub);margin:-4px 0 8px}
+.thumbs .cntbtn{position:absolute;left:4px;bottom:4px;border:0;border-radius:8px;background:#000a;color:#fff;font-size:13px;padding:2px 8px}
+#cv{width:100%;border-radius:10px;display:block;background:#000}
+.crow{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line)}
+.crow.off{opacity:.4}
+.crow .nm{flex:1}
+.crow .n{min-width:44px;text-align:center;font-weight:700;font-size:18px}
+.crow button{width:30px;height:30px;border-radius:50%;border:0;background:var(--card);color:var(--text);font-size:18px;padding:0}
+.total{font-size:20px;font-weight:700;margin:10px 0 2px}
 .badge{font-size:12px;color:var(--green)}
 </style>
 </head>
@@ -135,6 +143,70 @@ function resize(file, max = 1280) {
 function viewImg(src) { const v = $('viewer'); v.firstElementChild.src = src; v.style.display = 'flex'; }
 $('viewer').onclick = () => $('viewer').style.display = 'none';
 
+// ---------- object counting (on-device COCO-SSD) ----------
+const JA = {person:'人',bicycle:'自転車',car:'車',motorcycle:'バイク',airplane:'飛行機',bus:'バス',train:'電車',truck:'トラック',boat:'ボート','traffic light':'信号機','fire hydrant':'消火栓','stop sign':'一時停止標識','parking meter':'パーキングメーター',bench:'ベンチ',bird:'鳥',cat:'猫',dog:'犬',horse:'馬',sheep:'羊',cow:'牛',elephant:'象',bear:'クマ',zebra:'シマウマ',giraffe:'キリン',backpack:'リュック',umbrella:'傘',handbag:'ハンドバッグ',tie:'ネクタイ',suitcase:'スーツケース',frisbee:'フリスビー',skis:'スキー板',snowboard:'スノーボード','sports ball':'ボール',kite:'凧','baseball bat':'バット','baseball glove':'グローブ',skateboard:'スケボー',surfboard:'サーフボード','tennis racket':'ラケット',bottle:'ボトル','wine glass':'ワイングラス',cup:'カップ',fork:'フォーク',knife:'ナイフ',spoon:'スプーン',bowl:'ボウル',banana:'バナナ',apple:'りんご',sandwich:'サンドイッチ',orange:'オレンジ',broccoli:'ブロッコリー',carrot:'にんじん','hot dog':'ホットドッグ',pizza:'ピザ',donut:'ドーナツ',cake:'ケーキ',chair:'椅子',couch:'ソファ','potted plant':'鉢植え',bed:'ベッド','dining table':'テーブル',toilet:'トイレ',tv:'テレビ',laptop:'ノートPC',mouse:'マウス',remote:'リモコン',keyboard:'キーボード','cell phone':'スマホ',microwave:'電子レンジ',oven:'オーブン',toaster:'トースター',sink:'シンク',refrigerator:'冷蔵庫',book:'本',clock:'時計',vase:'花瓶',scissors:'はさみ','teddy bear':'ぬいぐるみ','hair drier':'ドライヤー',toothbrush:'歯ブラシ'};
+let detector = null;
+const loadScript = src => new Promise((res, rej) => { const e = document.createElement('script'); e.src = src; e.onload = res; e.onerror = () => rej(new Error('load ' + src)); document.head.appendChild(e); });
+async function getDetector() {
+  if (detector) return detector;
+  if (!window.tf) await loadScript('lib/tf.min.js');
+  if (!window.cocoSsd) await loadScript('lib/coco-ssd.min.js');
+  detector = await cocoSsd.load({modelUrl: 'lib/model/model.json'});
+  return detector;
+}
+async function countModal(m, idx, onDone) {
+  const box = $('mbox'), close = () => $('modal').style.display = 'none';
+  $('modal').style.display = 'flex';
+  box.innerHTML = '<h3 style="margin:0 0 8px">写真のものを数える</h3><div class="empty" id="cst">モデルを読み込み中…（初回のみ少し時間がかかります）</div><div class="row"><button class="btn" id="cc">閉じる</button></div>';
+  $('cc').onclick = close;
+  let dets;
+  const img = new Image();
+  try {
+    img.src = m.photos[idx]; await img.decode();
+    const d = await getDetector();
+    $('cst').textContent = '解析中…';
+    dets = await d.detect(img, 100, 0.2);
+  } catch (err) { $('cst').textContent = '解析に失敗しました。通信状態を確認して、もう一度お試しください。'; return; }
+  let thr = 0.5; const off = new Set(), adj = {};
+  box.innerHTML = `<h3 style="margin:0 0 8px">写真のものを数える</h3>
+    <canvas id="cv"></canvas>
+    <label style="display:block;font-size:13px;color:var(--sub);margin-top:8px">検出の感度（右ほどたくさん検出・誤検出も増えます）</label>
+    <input type="range" id="sl" min="20" max="90" value="${100 - thr * 100 + 20}" style="width:100%">
+    <div class="total" id="tot"></div>
+    <div id="cl"></div>
+    <p style="font-size:12px;color:var(--sub);margin:6px 0">AIの推定なので誤りがあります。−/＋で数を直せます。行をタップで集計から除外できます。</p>
+    <div class="row"><button class="btn fill" id="ins" style="flex:1;background:var(--green)">メモに追記</button><button class="btn" id="cc">閉じる</button></div>`;
+  const cv = $('cv');
+  const draw = () => {
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    const g = cv.getContext('2d'); g.drawImage(img, 0, 0);
+    g.lineWidth = Math.max(2, cv.width / 250); g.font = `bold ${Math.max(14, cv.width / 40)}px sans-serif`;
+    cur().forEach(d => { if (off.has(d.class)) return;
+      const [x, y, w, h] = d.bbox; g.strokeStyle = '#ff9f0a'; g.strokeRect(x, y, w, h);
+      g.fillStyle = '#ff9f0a'; g.fillText(JA[d.class] || d.class, x + 3, y + parseInt(g.font) + 1); });
+  };
+  const cur = () => dets.filter(d => d.score >= thr);
+  const groups = () => { const o = {}; cur().forEach(d => o[d.class] = (o[d.class] || 0) + 1);
+    Object.keys(adj).forEach(k => { o[k] = Math.max(0, (o[k] || 0) + adj[k]); }); return Object.entries(o).sort((a, b) => b[1] - a[1]); };
+  const list = () => {
+    const g = groups(), total = g.filter(([k]) => !off.has(k)).reduce((a, [, n]) => a + n, 0);
+    $('tot').textContent = `合計 ${total}個`;
+    $('cl').innerHTML = g.length ? g.map(([k, n]) => `<div class="crow ${off.has(k) ? 'off' : ''}"><span class="nm" data-t="${k}">${JA[k] || k}</span><button data-a="${k}:-1">−</button><span class="n">${n}</span><button data-a="${k}:1">＋</button></div>`).join('') : '<div class="empty" style="padding:14px">何も検出できませんでした。感度を上げてみてください。</div>';
+    $('cl').querySelectorAll('[data-t]').forEach(e => e.onclick = () => { off.has(e.dataset.t) ? off.delete(e.dataset.t) : off.add(e.dataset.t); list(); draw(); });
+    $('cl').querySelectorAll('[data-a]').forEach(e => e.onclick = () => { const [k, v] = e.dataset.a.split(':'); adj[k] = (adj[k] || 0) + +v; list(); });
+  };
+  $('sl').oninput = e => { thr = (120 - +e.target.value) / 100; list(); draw(); };
+  $('cc').onclick = close;
+  $('ins').onclick = () => {
+    const g = groups().filter(([k, n]) => !off.has(k) && n > 0);
+    if (!g.length) return;
+    const line = `📷写真${idx + 1}: ` + g.map(([k, n]) => `${JA[k] || k}${n}`).join('、') + `（合計${g.reduce((a, [, n]) => a + n, 0)}）`;
+    const ta = $('mb'); ta.value = (ta.value && !ta.value.endsWith('\n') ? ta.value + '\n' : ta.value) + line;
+    m.body = ta.value; close(); if (onDone) onDone();
+  };
+  list(); draw();
+}
+
 // ---------- render ----------
 function summary() {
   const open = tasks.filter(t => !t.done);
@@ -195,7 +267,8 @@ function renderEditor() {
   const sync = () => { m.title = $('mt').value; m.body = $('mb').value; };
   const thumbs = () => {
     $('cnt').textContent = `📷 このメモの写真 ${m.photos.length}枚　／　累計撮影 ${shots()}枚`;
-    $('th').innerHTML = m.photos.map((p,i) => `<div><img src="${p}" data-i="${i}"><button class="x" data-x="${i}">×</button></div>`).join('');
+    $('th').innerHTML = m.photos.map((p,i) => `<div><img src="${p}" data-i="${i}"><button class="x" data-x="${i}">×</button><button class="cntbtn" data-c="${i}">🔢 数える</button></div>`).join('');
+    $('th').querySelectorAll('.cntbtn').forEach(e => e.onclick = () => { sync(); countModal(m, +e.dataset.c, thumbs); });
     $('th').querySelectorAll('img').forEach(e => e.onclick = () => viewImg(m.photos[e.dataset.i]));
     $('th').querySelectorAll('.x').forEach(e => e.onclick = () => { sync(); m.photos.splice(+e.dataset.x, 1); thumbs(); });
   };
